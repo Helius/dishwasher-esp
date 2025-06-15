@@ -118,8 +118,8 @@ public:
     : mPin(pin) 
   {
     pinMode(mPin, OUTPUT);
-    ledcSetup(0, 2000, 8);   // setup beeper
-    ledcAttachPin(mPin, 0);  // attach beeper
+    //ledcSetup(0, 2000, 8);   // setup beeper
+    ledcAttach(mPin, 0, 8);  // attach beeper
   }
 
   void play(Melody melody) {
@@ -163,6 +163,7 @@ public:
         COROUTINE_DELAY(1000);
         noTone();
         COROUTINE_DELAY(500);
+        
       } else if (mCurrentMelody == Melody::Finish) {
         tone(NOTE_C5);
         COROUTINE_DELAY(500);
@@ -182,7 +183,7 @@ public:
 
       mCurrentMelody = Melody::No;
 
-      COROUTINE_DELAY(990);
+      COROUTINE_DELAY_SECONDS(1);
     }
     COROUTINE_END();
   }

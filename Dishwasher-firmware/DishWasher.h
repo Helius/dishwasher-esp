@@ -1,16 +1,28 @@
-#include "esp32-hal-gpio.h"
 #pragma once
 
+#include "esp32-hal.h"
+#include "esp32-hal-gpio.h"
 #include "ace_routine/Coroutine.h"
 #include "SoundPlayer.h"
+#include "Logger.h"
+
+
+#define LOGSYSLOG(msg) \
+  logSyslog(msg); \
+  COROUTINE_DELAY_SECONDS(1);
+
 
 #define DRAIN_WATER \
   state = State::Drain; \
-  COROUTINE_DELAY_SECONDS(60); /* wait to water collect in tray */ \
+  COROUTINE_DELAY_SECONDS(30); /* waiting for the water collects in the tray */ \
   while (!pressostate) { \
     outputs.drainPump = true; \
     COROUTINE_DELAY_SECONDS(5); \
   } \
+  COROUTINE_DELAY_SECONDS(10); \
+  outputs.drainPump = false; \
+  COROUTINE_DELAY_SECONDS(20); \
+  outputs.drainPump = true; \
   COROUTINE_DELAY_SECONDS(10); \
   outputs.drainPump = false;
 
@@ -66,6 +78,10 @@ public:
   bool heater = false;
   bool inletValve = false;
 
+  bool prewash = false;
+  int cycles = 4;
+  int startSec = 0;
+
   enum class State {
     Idle,
     Armed,
@@ -81,63 +97,123 @@ public:
   int cycle = 0;
   Outputs outputs;
 
+
+  // public constants
+
+  const int prewashCycles = 3;
+  const int rinsingCycles = 2;
+
 public:
+
+  int totalTime() const {
+    int result = prewash ? prewashCycles * 8 * timeMultiplyer : 0;
+    result += cycles * 50 * timeMultiplyer;                               // washing
+    result += rinsingCycles * 15 * timeMultiplyer + 10 * timeMultiplyer;  // rinsing
+    result += 10 * timeMultiplyer;                                        // drying
+    return result;
+  }
+
   int runCoroutine() override {
     COROUTINE_BEGIN();
-    cycle = 0;
+    LOGSYSLOG("Start programm");
+
     while (true) {
+      outputs.throwAid = false;
+      cycle = 0;
+
       // if we got some water - drain it
       while (!pressostate) {
+        LOGSYSLOG("Drain water");
         outputs.drainPump = true;
         COROUTINE_DELAY_SECONDS(5);
       }
       outputs.drainPump = false;
       mSnd.play(SoundPlayer::Melody::Start);
-      state = State::Idle;
 
-      COROUTINE_AWAIT(buttonPressed);
+      LOGSYSLOG("Waiting door open...");
+      COROUTINE_AWAIT(doorOpen);
+
+      //COROUTINE_AWAIT(buttonPressed);
       state = State::Armed;
-      COROUTINE_DELAY_SECONDS(3);
+      COROUTINE_DELAY_SECONDS(1);
+      LOGSYSLOG("> Ready to start, waiting door closed...");
       COROUTINE_AWAIT(!doorOpen);
 
-      state = State::PreWashing;
+      startSec = millis() / 1000;
 
-      for (cycle = 0; cycle < 2; ++cycle) {
-        outputs.washingPump = true;
-        COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
-        outputs.washingPump = false;
-        COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
+      if (prewash) {
+        LOGSYSLOG("> Prewash");
+        // prewashing
+        state = State::PreWashing;
+        for (cycle = 0; cycle < prewashCycles; ++cycle) {
+          LOGSYSLOG("start wpump");
+          outputs.washingPump = true;
+          COROUTINE_DELAY_SECONDS(5 * timeMultiplyer);
+          LOGSYSLOG("stop wpump");
+          outputs.washingPump = false;
+          COROUTINE_DELAY_SECONDS(3 * timeMultiplyer);
+        }
+        LOGSYSLOG("drain water");
+        DRAIN_WATER
       }
 
-      DRAIN_WATER
-
+      // washing with aid
+      LOGSYSLOG("> Start washing");
       state = State::Washing;
       outputs.throwAid = true;
-
-      for (cycle = 0; cycle < 3; ++cycle) {
+      for (cycle = 0; cycle < cycles; ++cycle) {
+        LOGSYSLOG("start wpump");
         outputs.washingPump = true;
-        COROUTINE_DELAY_SECONDS(5 * timeMultiplyer);
+        COROUTINE_DELAY_SECONDS(3 * timeMultiplyer);
         outputs.throwAid = false;
-        COROUTINE_DELAY_SECONDS(35 * timeMultiplyer);
+        COROUTINE_DELAY_SECONDS(37 * timeMultiplyer);
+        LOGSYSLOG("stop wpump");
         outputs.washingPump = false;
+        if (cycle < cycles - 1) {
+          COROUTINE_DELAY_SECONDS(3 * timeMultiplyer);
+        }
+      }
+      LOGSYSLOG("drain water");
+      DRAIN_WATER
+
+      // rinsing
+      LOGSYSLOG("> Rinsing");
+      for (cycle = 0; cycle < rinsingCycles; ++cycle) {
+        state = State::Rinsing;
+        LOGSYSLOG("start wpump");
+        outputs.washingPump = true;
+        if (cycle == rinsingCycles - 1) {  // add rinsing aid on the last cycle
+          outputs.throwAid = true;
+        }
+        COROUTINE_DELAY_SECONDS(4 * timeMultiplyer);
+        outputs.throwAid = false;
         COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
+        if (cycle == rinsingCycles - 1) {  // add time to the last rinsing
+          COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
+        }
+        LOGSYSLOG("stop wpump");
+        outputs.washingPump = false;
+        COROUTINE_DELAY_SECONDS(1 * timeMultiplyer);
+        LOGSYSLOG("drain water");
+        DRAIN_WATER
       }
 
-      DRAIN_WATER
-
-      state = State::Rinsing;
-      outputs.washingPump = true;
-      COROUTINE_DELAY_SECONDS(30 * timeMultiplyer);
-      outputs.washingPump = false;
-
-      DRAIN_WATER
+      LOGSYSLOG("> Drying");
+      //drying
       state = State::Drying;
-
       mSnd.play(SoundPlayer::Melody::Drying);
 
       COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
-      DRAIN_WATER
+
+      // drain remained water
+      LOGSYSLOG("drain water");
+      outputs.drainPump = true;
+      COROUTINE_DELAY_SECONDS(5);
+      LOGSYSLOG("stop drain water");
+      outputs.drainPump = false;
+
       state = State::Finish;
+      LOGSYSLOG("> Finish");
       mSnd.play(SoundPlayer::Melody::Finish);
     }
     COROUTINE_END();
@@ -152,11 +228,6 @@ public:
     // read temperature
     temperature = analogRead(AN::Ntc);
 
-    if (doorOpen && state == State::Drying) {
-      state = State::Idle;
-      reset();
-    }
-
     if (!onPause && doorOpen && (state != State::Idle && state != State::Armed && state != State::Finish && state != State::Drying)) {
       savedOutputs = outputs;
       suspend();
@@ -170,15 +241,25 @@ public:
       resume();
     }
 
+    bool oldHeater = heater;
+
     if (!doorOpen && outputs.washingPump && !pressostate) {
-      if (temperature > 1450) {
+
+      if (temperature > temperatureThreshold + 100) {
         heater = true;
       }
-      if (temperature < 1350) {
+      if (temperature < temperatureThreshold - 50) {
         heater = false;
       }
     } else {
       heater = false;
+    }
+
+    if (heater != oldHeater) {
+      String msg = "heater changed: ";
+      msg += heater;
+      logSyslog(msg);
+      sleep(50);
     }
 
     // update output values
@@ -210,24 +291,14 @@ public:
     if (onPause) {
       inletValve = false;
     } else {
-      switch (state) {
-        case State::PreWashing:
-        case State::Washing:
-        case State::Rinsing:
-          if (pressostate) {
-            inletValve = true;
-          } else {
-            inletValve = false;
-          }
-          break;
-        case State::Idle:
-        case State::Armed:
-        case State::Drain:
-        case State::Drying:
-        case State::Finish:
-        default:
+      if (outputs.washingPump) {
+        if (pressostate) {
+          inletValve = true;
+        } else {
           inletValve = false;
-          break;
+        }
+      } else {
+        inletValve = false;
       }
     }
   }
@@ -260,8 +331,10 @@ public:
 
 private:
   Outputs savedOutputs;
-  int timeMultiplyer = 50;  //'minute' multiplyer
   SoundPlayer& mSnd;
+
+  const int timeMultiplyer = 50;          //'minute' multiplyer
+  const int temperatureThreshold = 1500;  // heater turn on/off threshold
 };
 
 class FillWaterCoroutine : public Coroutine {
@@ -304,18 +377,18 @@ public:
   int runCoroutine() override {
     COROUTINE_BEGIN();
     while (true) {
-      if (dw.state != DishWasher::State::Idle
-          && dw.state != DishWasher::State::Finish
-          && dw.state != DishWasher::State::Armed) {
+      // if (dw.state != DishWasher::State::Idle
+      //     && dw.state != DishWasher::State::Finish
+      //     && dw.state != DishWasher::State::Armed) {
 
-        temprLog[temprLogIndex++] = dw.temperature;
-        if (temprLogIndex >= 200) {
-          temprLogIndex = 0;
-        }
-        COROUTINE_DELAY_SECONDS(60);
-      } else {
-        COROUTINE_DELAY_SECONDS(5);
+      temprLog[temprLogIndex++] = dw.temperature;
+      if (temprLogIndex >= 200) {
+        temprLogIndex = 0;
       }
+      COROUTINE_DELAY_SECONDS(60);
+      // } else {
+      //   COROUTINE_DELAY_SECONDS(5);
+      // }
     }
     COROUTINE_END();
   };

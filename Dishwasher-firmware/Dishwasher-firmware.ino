@@ -5,6 +5,8 @@
 
 // подключить библиотеку файловой системы (до #include GyverPortal)
 #include <LittleFS.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
 
 #include <GyverPortal.h>
 GyverPortal ui(&LittleFS);  // передать ссылку на fs (SPIFFS/LittleFS)
@@ -16,6 +18,8 @@ using namespace ace_routine;
 #include "DIshWasherWM.h"
 #include "SoundPlayer.h"
 
+#define PrewashSwitch "prewashsw"
+#define CycleSlider "CycleSlider"
 #define InletValveSw "inletsw"
 #define DrainSw "drainsw"
 #define AidSw "aidsw"
@@ -29,6 +33,19 @@ DishWasher dw(snd);
 DishWasherVm vm;
 LedCoroutine ledC(dw);
 TemprLogCoroutine temprC(dw);
+
+// PC running syslog server (adjust this)
+const char* syslog_host = "192.168.0.54";  // <-- your PC IP address!
+const int syslog_port = 514;               // Should match Python server
+
+WiFiUDP udp;
+
+void logSyslog(const String& message) {
+  udp.beginPacket(syslog_host, syslog_port);
+  udp.print(String("esp32-dishwasher: ") + message);
+  udp.endPacket();
+  Serial.println("[SYSLOG] " + message);
+}
 
 class IOCoroutine : public Coroutine {
 public:
@@ -58,18 +75,25 @@ public:
 
 // конструктор страницы
 void build() {
-  const char *names[] = {
+  const char* names[] = {
     "temperature"
   };
 
   GP.BUILD_BEGIN();
   GP.THEME(GP_DARK);
 
-  GP.LABEL("DishWasher v2.2");
+  GP.LABEL("DishWasher v3.6 ");
 
   GP.BREAK();
+  GP.LABEL("Prewash: ");
+  GP.SWITCH(PrewashSwitch, dw.prewash);
+  GP.BREAK();
+  GP.LABEL("Cycles: ");
+  GP.SLIDER(CycleSlider, dw.cycles, 2, 5, 1);
   GP.BREAK();
   GP.LABEL("State: " + vm.stateStr);
+  GP.BREAK();
+  GP.LABEL("Timing: " + vm.timeStr);
   GP.BREAK();
   GP.BREAK();
   GP.LABEL("Door: " + vm.doorStr);
@@ -121,10 +145,6 @@ void action() {
   // был клик по компоненту
   if (ui.click()) {
     // проверяем компоненты и обновляем переменные
-
-    // if (ui.click(ResetBtn)) {
-    //   Serial.println("Button click");
-    // }
     if (ui.clickBool(InletValveSw, dw.inletValve)) {
     }
     if (ui.clickBool(DrainSw, dw.outputs.drainPump)) {
@@ -134,6 +154,10 @@ void action() {
     if (ui.clickBool(CircPumpSw, dw.outputs.washingPump)) {
     }
     if (ui.clickBool(HeaterSw, dw.heater)) {
+    }
+    if (ui.clickBool(PrewashSwitch, dw.prewash)) {
+    }
+    if (ui.clickInt(CycleSlider, dw.cycles)) {
     }
   }
 }
@@ -147,9 +171,12 @@ void startup() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(AP_SSID, AP_PASS);
   WiFi.setHostname("DishWasher");
-  while (WiFi.status() != WL_CONNECTED) {
+  int tries = 10;
+  while (WiFi.status() != WL_CONNECTED && tries > 0) {
     delay(500);
     Serial.print(".");
+    --tries;
   }
   Serial.println(WiFi.localIP());
+  logSyslog("Started");
 }
