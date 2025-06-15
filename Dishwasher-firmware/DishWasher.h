@@ -79,7 +79,7 @@ public:
   bool inletValve = false;
 
   bool prewash = false;
-  int cycles = 4;
+
   int startSec = 0;
 
   enum class State {
@@ -99,9 +99,9 @@ public:
 
 
   // public constants
-
-  const int prewashCycles = 3;
-  const int rinsingCycles = 2;
+  int cycles = 3; // main wash cycles (one water)
+  const int prewashCycles = 3; // (one water)
+  const int rinsingCycles = 2; // (change water every cycle)
 
 public:
 
@@ -160,19 +160,16 @@ public:
       // washing with aid
       LOGSYSLOG("> Start washing");
       state = State::Washing;
+      LOGSYSLOG("start wpump");
+      outputs.washingPump = true;
       outputs.throwAid = true;
       for (cycle = 0; cycle < cycles; ++cycle) {
-        LOGSYSLOG("start wpump");
-        outputs.washingPump = true;
         COROUTINE_DELAY_SECONDS(3 * timeMultiplyer);
         outputs.throwAid = false;
         COROUTINE_DELAY_SECONDS(37 * timeMultiplyer);
-        LOGSYSLOG("stop wpump");
-        outputs.washingPump = false;
-        if (cycle < cycles - 1) {
-          COROUTINE_DELAY_SECONDS(3 * timeMultiplyer);
-        }
       }
+      LOGSYSLOG("stop wpump");
+      outputs.washingPump = false;
       LOGSYSLOG("drain water");
       DRAIN_WATER
 
