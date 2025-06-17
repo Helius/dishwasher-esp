@@ -99,9 +99,9 @@ public:
 
 
   // public constants
-  int cycles = 3; // main wash cycles (one water)
-  const int prewashCycles = 3; // (one water)
-  const int rinsingCycles = 2; // (change water every cycle)
+  int cycles = 3;               // main wash cycles (one water)
+  const int prewashCycles = 3;  // (one water)
+  const int rinsingCycles = 2;  // (change water every cycle)
 
 public:
 
@@ -117,102 +117,102 @@ public:
     COROUTINE_BEGIN();
     LOGSYSLOG("Start programm");
 
-    while (true) {
+    //while (true) {
+    outputs.throwAid = false;
+    cycle = 0;
+
+    // if we got some water - drain it
+    while (!pressostate) {
+      LOGSYSLOG("Drain water");
+      outputs.drainPump = true;
+      COROUTINE_DELAY_SECONDS(5);
+    }
+    outputs.drainPump = false;
+    mSnd.play(SoundPlayer::Melody::Start);
+
+    LOGSYSLOG("Waiting door open...");
+    COROUTINE_AWAIT(doorOpen);
+
+    //COROUTINE_AWAIT(buttonPressed);
+    state = State::Armed;
+    COROUTINE_DELAY_SECONDS(1);
+    LOGSYSLOG("> Ready to start, waiting door closed...");
+    COROUTINE_AWAIT(!doorOpen);
+
+    startSec = millis() / 1000;
+
+    if (prewash) {
+      LOGSYSLOG("> Prewash");
+      // prewashing
+      state = State::PreWashing;
+      for (cycle = 0; cycle < prewashCycles; ++cycle) {
+        LOGSYSLOG("start wpump");
+        outputs.washingPump = true;
+        COROUTINE_DELAY_SECONDS(5 * timeMultiplyer);
+        LOGSYSLOG("stop wpump");
+        outputs.washingPump = false;
+        COROUTINE_DELAY_SECONDS(3 * timeMultiplyer);
+      }
+      LOGSYSLOG("drain water");
+      DRAIN_WATER
+    }
+
+    // washing with aid
+    LOGSYSLOG("> Start washing");
+    state = State::Washing;
+    LOGSYSLOG("start wpump");
+    outputs.washingPump = true;
+    outputs.throwAid = true;
+    for (cycle = 0; cycle < cycles; ++cycle) {
+      COROUTINE_DELAY_SECONDS(3 * timeMultiplyer);
       outputs.throwAid = false;
-      cycle = 0;
+      COROUTINE_DELAY_SECONDS(37 * timeMultiplyer);
+    }
+    LOGSYSLOG("stop wpump");
+    outputs.washingPump = false;
+    LOGSYSLOG("drain water");
+    DRAIN_WATER
 
-      // if we got some water - drain it
-      while (!pressostate) {
-        LOGSYSLOG("Drain water");
-        outputs.drainPump = true;
-        COROUTINE_DELAY_SECONDS(5);
-      }
-      outputs.drainPump = false;
-      mSnd.play(SoundPlayer::Melody::Start);
-
-      LOGSYSLOG("Waiting door open...");
-      COROUTINE_AWAIT(doorOpen);
-
-      //COROUTINE_AWAIT(buttonPressed);
-      state = State::Armed;
-      COROUTINE_DELAY_SECONDS(1);
-      LOGSYSLOG("> Ready to start, waiting door closed...");
-      COROUTINE_AWAIT(!doorOpen);
-
-      startSec = millis() / 1000;
-
-      if (prewash) {
-        LOGSYSLOG("> Prewash");
-        // prewashing
-        state = State::PreWashing;
-        for (cycle = 0; cycle < prewashCycles; ++cycle) {
-          LOGSYSLOG("start wpump");
-          outputs.washingPump = true;
-          COROUTINE_DELAY_SECONDS(5 * timeMultiplyer);
-          LOGSYSLOG("stop wpump");
-          outputs.washingPump = false;
-          COROUTINE_DELAY_SECONDS(3 * timeMultiplyer);
-        }
-        LOGSYSLOG("drain water");
-        DRAIN_WATER
-      }
-
-      // washing with aid
-      LOGSYSLOG("> Start washing");
-      state = State::Washing;
+    // rinsing
+    LOGSYSLOG("> Rinsing");
+    for (cycle = 0; cycle < rinsingCycles; ++cycle) {
+      state = State::Rinsing;
       LOGSYSLOG("start wpump");
       outputs.washingPump = true;
-      outputs.throwAid = true;
-      for (cycle = 0; cycle < cycles; ++cycle) {
-        COROUTINE_DELAY_SECONDS(3 * timeMultiplyer);
-        outputs.throwAid = false;
-        COROUTINE_DELAY_SECONDS(37 * timeMultiplyer);
+      if (cycle == rinsingCycles - 1) {  // add rinsing aid on the last cycle
+        outputs.throwAid = true;
+      }
+      COROUTINE_DELAY_SECONDS(4 * timeMultiplyer);
+      outputs.throwAid = false;
+      COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
+      if (cycle == rinsingCycles - 1) {  // add time to the last rinsing
+        COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
       }
       LOGSYSLOG("stop wpump");
       outputs.washingPump = false;
+      COROUTINE_DELAY_SECONDS(1 * timeMultiplyer);
       LOGSYSLOG("drain water");
       DRAIN_WATER
-
-      // rinsing
-      LOGSYSLOG("> Rinsing");
-      for (cycle = 0; cycle < rinsingCycles; ++cycle) {
-        state = State::Rinsing;
-        LOGSYSLOG("start wpump");
-        outputs.washingPump = true;
-        if (cycle == rinsingCycles - 1) {  // add rinsing aid on the last cycle
-          outputs.throwAid = true;
-        }
-        COROUTINE_DELAY_SECONDS(4 * timeMultiplyer);
-        outputs.throwAid = false;
-        COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
-        if (cycle == rinsingCycles - 1) {  // add time to the last rinsing
-          COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
-        }
-        LOGSYSLOG("stop wpump");
-        outputs.washingPump = false;
-        COROUTINE_DELAY_SECONDS(1 * timeMultiplyer);
-        LOGSYSLOG("drain water");
-        DRAIN_WATER
-      }
-
-      LOGSYSLOG("> Drying");
-      //drying
-      state = State::Drying;
-      mSnd.play(SoundPlayer::Melody::Drying);
-
-      COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
-
-      // drain remained water
-      LOGSYSLOG("drain water");
-      outputs.drainPump = true;
-      COROUTINE_DELAY_SECONDS(5);
-      LOGSYSLOG("stop drain water");
-      outputs.drainPump = false;
-
-      state = State::Finish;
-      LOGSYSLOG("> Finish");
-      mSnd.play(SoundPlayer::Melody::Finish);
     }
+
+    LOGSYSLOG("> Drying");
+    //drying
+    state = State::Drying;
+    mSnd.play(SoundPlayer::Melody::Drying);
+
+    COROUTINE_DELAY_SECONDS(10 * timeMultiplyer);
+
+    // drain remained water
+    LOGSYSLOG("drain water");
+    outputs.drainPump = true;
+    COROUTINE_DELAY_SECONDS(5);
+    LOGSYSLOG("stop drain water");
+    outputs.drainPump = false;
+
+    state = State::Finish;
+    LOGSYSLOG("> Finish");
+    mSnd.play(SoundPlayer::Melody::Finish);
+    //}
     COROUTINE_END();
   }
 
@@ -256,7 +256,6 @@ public:
       String msg = "heater changed: ";
       msg += heater;
       logSyslog(msg);
-      sleep(50);
     }
 
     // update output values
